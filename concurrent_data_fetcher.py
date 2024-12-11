@@ -10,6 +10,9 @@ import numpy as np
 import csv
 from sklearn.metrics.pairwise import cosine_similarity
 import json
+import httpx
+import json
+from discord_webhook import DiscordWebhook, DiscordEmbed
 
 # Run this to grab latest 200 data points of data, format it, normalize it and then feed into the model
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # 0 (default) shows all, 2 suppresses INFO messages, 3 also suppresses WARNING messages
@@ -26,7 +29,8 @@ mse_dict = {}
 # Function to fetch open interest data
 def fetch_open_interest_data(symbol, limit=1):
     endpoint = f"https://www.binance.com/futures/data/openInterestHist?symbol={symbol}&period=5m&limit={limit}"
-    response = requests.get(endpoint)
+    timeout = httpx.Timeout(10.0, read=None)
+    response = httpx.get(endpoint, verify=False, timeout=timeout)
     if response.status_code == 200:
         data = response.json()
         open_interest_data = [(item.get('sumOpenInterest'), item.get('sumOpenInterestValue'), item.get('timestamp')) for item in data if item.get('sumOpenInterest') and item.get('sumOpenInterestValue')]
@@ -39,7 +43,8 @@ def fetch_open_interest_data(symbol, limit=1):
 # Function to fetch kline data
 def fetch_kline_data(symbol, limit=1):
     endpoint = f"https://fapi.binance.com/fapi/v1/klines?symbol={symbol}&interval=5m&limit={limit}"
-    response = requests.get(endpoint)
+    timeout = httpx.Timeout(10.0, read=None)
+    response = httpx.get(endpoint, verify=False, timeout=timeout)
     if response.status_code == 200:
         data = response.json()
         kline_data = [item for item in data if len(item) > 1]
@@ -116,11 +121,11 @@ def normalize_column(column_data):
     return normalized_column
 
 def send_to_discord_webhook(content):
-    webhook_url = 'https://discord.com/api/webhooks/1155503541562114109/84mkMKX4KLQ30EQi0SQSjWfx1HyuCRHZb0kwVOVwNRrSDGRbJIlSEkTT2s6ptIIiU3VB'
+    webhook_url = 'https://discord.com/api/webhooks/1312561303197323384/qbMpBjPlqKlF1dYEnglbMxtVEOuvCx3V0H7eHa6ruuylZGkrEO72nex62HTOd5_dMivH'
     payload = {'content': content}
     headers = {'Content-Type': 'application/json'}
 
-    response = requests.post(webhook_url, json=payload, headers=headers)
+    response = httpx.post(webhook_url, json=payload, headers=headers)
 
     if response.status_code == 204:
         print('Message sent to Discord webhook successfully.')
@@ -147,92 +152,101 @@ def calculate_cosine_similarity(data, decoded_data):
 
     return cosine_sim.mean()  # Return the mean cosine similarity
 
-
-def send_heartbeat():
-    webhook_url = "https://discord.com/api/webhooks/1155503541562114109/84mkMKX4KLQ30EQi0SQSjWfx1HyuCRHZb0kwVOVwNRrSDGRbJIlSEkTT2s6ptIIiU3VB"
-    message = "Hourly Heartbeat Check"
-
-    payload = {
-        "content": message
-    }
-
-    headers = {
-        "Content-Type": "application/json"
-    }
-
+def execute_signal(pair, sim):
     try:
-        response = requests.post(webhook_url, data=json.dumps(payload), headers=headers)
-        if response.status_code == 204:
-            print("Heartbeat message sent successfully.")
-        else:
-            print(f"Failed to send heartbeat. Status code: {response.status_code}")
-    except requests.exceptions.RequestException as e:
-        print(f"An error occurred: {e}")
+        webhook = DiscordWebhook(
+            url="https://discord.com/api/webhooks/1312561303197323384/qbMpBjPlqKlF1dYEnglbMxtVEOuvCx3V0H7eHa6ruuylZGkrEO72nex62HTOd5_dMivH"
+        )
+
+        embed = build_embedded_content(pair, sim)
+        webhook.add_embed(embed)
+
+        response = webhook.execute()
+
+    except Exception as e:
+        print(e)
+        pass
+
+
+def build_embedded_content(pair, sim):
+    # create embed object for webhook
+    embed = DiscordEmbed(title='🚨 Manipulation Alert 🚨', color='00ff00')
+    embed.set_author(name='manipulation-bot')
+    embed.set_timestamp()
+    embed.add_embed_field(name='PAIR', value=pair, inline=False)
+    embed.add_embed_field(name='Cosine Coefficient', value=sim + ' :white_check_mark:', inline=False)
+    embed.add_embed_field(name='Time UTC', value=time.strftime("%d-%m-%Y %H:%M:%S", time.localtime()), inline=False)
+
+    return embed
 
 if __name__ == "__main__":
+
     # Run the script periodically at 5-minute intervals within an hour
     while True:
 
-        # Get the current time
-        now = datetime.now()
+        try:
+            # Get the current time
+            now = datetime.now()
 
-        current_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        print("________________________________________________________________________")
-        print("Current Timestamp with Hours and Minutes:", current_timestamp)
-        csv_files = [csv_file for csv_file in os.listdir('concurrent_data') if csv_file.endswith('.csv')]
+            current_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+            print("________________________________________________________________________")
+            print("Current Timestamp with Hours and Minutes:", current_timestamp)
+            csv_files = [csv_file for csv_file in os.listdir('concurrent_data') if csv_file.endswith('.csv')]
 
-        with Pool(3) as pool:
-            pool.map(process_csv_file, csv_files)
+            with Pool(3) as pool:
+                pool.map(process_csv_file, csv_files)
 
-        # Get the current timestamp with hours and minutes
-        # Print the timestamp
-        print("Latest data fully retieved..")
+            # Get the current timestamp with hours and minutes
+            # Print the timestamp
+            print("Latest data fully retieved..")
 
-        # Process and normalize each CSV file
-        for csv_file in csv_files:
-            csv_file_path = os.path.join('concurrent_data', csv_file)
-            try:
-                # Load the CSV file into a DataFrame
-                df = pd.read_csv(csv_file_path)
+            # Process and normalize each CSV file
+            for csv_file in csv_files:
+                csv_file_path = os.path.join('concurrent_data', csv_file)
+                try:
+                    # Load the CSV file into a DataFrame
+                    df = pd.read_csv(csv_file_path)
 
-                # Iterate through each column
-                for col in df.columns:
-                    # Normalize and min-max the column
-                    df[col] = normalize_column(df[col])
+                    # Iterate through each column
+                    for col in df.columns:
+                        # Normalize and min-max the column
+                        df[col] = normalize_column(df[col])
 
-                # Save the normalized data back to the same CSV file
-                df.to_csv(csv_file_path, index=False)
+                    # Save the normalized data back to the same CSV file
+                    df.to_csv(csv_file_path, index=False)
 
-                # Read the data (excluding the header) and convert to numpy array
-                data = np.genfromtxt(csv_file_path, delimiter=',', skip_header=1)
+                    # Read the data (excluding the header) and convert to numpy array
+                    data = np.genfromtxt(csv_file_path, delimiter=',', skip_header=1)
 
-                # Reshape the data to match the model's expected input shape for an autoencoder
-                data = data.reshape((1, 25, 12))
+                    # Reshape the data to match the model's expected input shape for an autoencoder
+                    data = data.reshape((1, 25, 12))
 
-                # Predict using the autoencoder model
-                decoded_data = model.predict(data, verbose=0)
+                    # Predict using the autoencoder model
+                    decoded_data = model.predict(data, verbose=0)
 
-                # Get the symbol from the file name
-                symbol = csv_file.split('_')[0]
+                    # Get the symbol from the file name
+                    symbol = csv_file.split('_')[0]
 
-                cosine_sim = calculate_cosine_similarity(data, decoded_data)
+                    cosine_sim = calculate_cosine_similarity(data, decoded_data)
 
-                if cosine_sim > highest_cosine_similarity:
-                    highest_cosine_similarity = cosine_sim
-                    highest_cosine_similarity_symbol = symbol
-                    highest_cosine_similarity_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+                    if cosine_sim > highest_cosine_similarity:
+                        highest_cosine_similarity = cosine_sim
+                        highest_cosine_similarity_symbol = symbol
+                        highest_cosine_similarity_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
 
-                message = symbol + ' with Cosine Sim of: ' + str(cosine_sim)
+                    message = symbol + ' with Cosine Sim of: ' + str(cosine_sim)
 
-                print(message)
+                    print(message)
 
-                # Send the message to Discord webhook if Cosine Sim is greater than 0.98
-                if cosine_sim >= 0.94:
-                    send_to_discord_webhook(message)
+                    # Send the message to Discord webhook if Cosine Sim is greater than 0.98
+                    if cosine_sim >= 0.935:
+                        execute_signal(symbol, str(cosine_sim))
 
-            except Exception as e:
-                print(f"Error processing {csv_file_path}: {str(e)}")
+                except Exception as e:
+                    print(f"Error processing {csv_file_path}: {str(e)}")
 
-        print(f"Highest Cosine Similarity: {highest_cosine_similarity}, Symbol: {highest_cosine_similarity_symbol}, Timestamp: {highest_cosine_similarity_timestamp}")
-        print('Round Complete')
-        time.sleep(300)  # Delay for 5 minutes before running again
+            print(f"Highest Cosine Similarity: {highest_cosine_similarity}, Symbol: {highest_cosine_similarity_symbol}, Timestamp: {highest_cosine_similarity_timestamp}")
+            print('Round Complete')
+            time.sleep(300)  # Delay for 5 minutes before running again
+        except Exception as e:
+            continue

@@ -1,6 +1,7 @@
 import os
 import csv
 import requests
+import httpx
 from binance.client import Client
 
 # Run this to create the concurrent files, based off avialble Binance tickers
@@ -26,7 +27,7 @@ def get_usdt_symbols():
 
 def create_csv_file(symbol):
     endpoint = f"https://www.binance.com/futures/data/openInterestHist?symbol={symbol}&period=5m&limit=1"
-    response = requests.get(endpoint)
+    response = httpx.get(endpoint)
 
     if is_empty_response(response):
         print(f"No data available for {symbol}. Skipping file creation.")
